@@ -166,7 +166,7 @@ export default function AuditoriaPage({ params }: PageProps) {
           onClick={finalizarSessao}
           className="bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-600 font-bold py-3 rounded-xl flex items-center justify-center gap-1.5 transition-colors text-zinc-950 shadow-md shadow-emerald-950/20"
         >
-          <Check className="w-4 h-4 stroke-3" /> Salvar
+          <Check className="w-4 h-4 stroke-[3]" /> Salvar
         </button>
       </footer>
     </main>
