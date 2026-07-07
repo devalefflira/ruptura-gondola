@@ -64,6 +64,13 @@ export default function AuditoriaPage({ params }: PageProps) {
 
   async function handleBarcodeScan(barcode: string) {
     if (buscando) return;
+    
+    // REGRA DE OURO PARA GÔNDOLA: Se o primeiro item da lista (último bipado) 
+    // já for este mesmo código de barras, ignora o bipe imediatamente.
+    if (itens.length > 0 && itens[0].produtos?.codigo_barras === barcode) {
+      return;
+    }
+
     setBuscando(true);
     setMsgFeedback({ tipo: '', texto: '' });
 
@@ -79,28 +86,32 @@ export default function AuditoriaPage({ params }: PageProps) {
       return;
     }
 
-    const { data: itemVinculado, error: insertError } = await supabase
-      .from('itens_capturados')
-      .insert([{ sessao_id: sessaoId, produto_id: produto.id }])
-      .select('id, produtos(codigo_sistema, codigo_barras, descricao)')
-      .single();
+    // Validação extra caso a lista tenha atualizado durante a consulta ao banco
+    setItens((prev) => {
+      if (prev.length > 0 && prev[0].produtos?.codigo_barras === barcode) {
+        setBuscando(false);
+        return prev;
+      }
 
-    if (!insertError && itemVinculado) {
-      setItens((prev) => [itemVinculado as unknown as ItemCapturado, ...prev]);
+      // Se passou por todas as travas, insere no banco do Supabase de fato
+      supabase
+        .from('itens_capturados')
+        .insert([{ sessao_id: sessaoId, produto_id: produto.id }])
+        .then();
+
       setMsgFeedback({ tipo: 'sucesso', texto: `${produto.descricao} adicionado!` });
-    }
-    
-    setBuscando(false);
-  }
+      
+      const novoItem: ItemCapturado = {
+        id: Date.now(), // ID temporário para renderizar na tela instantaneamente
+        produtos: {
+          codigo_sistema: produto.codigo_sistema,
+          codigo_barras: produto.codigo_barras,
+          descricao: produto.descricao
+        }
+      };
 
-  async function finalizarSessao() {
-    if (itens.length === 0) {
-      alert("Capture ao menos um produto antes de salvar.");
-      return;
-    }
-    await supabase.from('sessoes_captura').update({ status: 'salvo' }).eq('id', sessaoId);
-    startTransition(() => {
-      router.replace('/');
+      setBuscando(false);
+      return [novoItem, ...prev];
     });
   }
 
