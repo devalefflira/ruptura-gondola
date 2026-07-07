@@ -1,9 +1,27 @@
 'use client';
-import { useEffect, useState, use } from 'react';
+import { useEffect, useState, use, useCallback, startTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import BarcodeScanner from '@/components/BarcodeScanner';
 import { Check, X, Barcode, ClipboardList, Loader2 } from 'lucide-react';
+
+interface Produto {
+  codigo_sistema: string;
+  codigo_barras: string;
+  descricao: string;
+}
+
+interface ItemCapturado {
+  id: number;
+  produtos: Produto | null;
+}
+
+interface Sessao {
+  id: string;
+  codigo_sessao: string;
+  data_inicio: string;
+  status: string;
+}
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -13,16 +31,12 @@ export default function AuditoriaPage({ params }: PageProps) {
   const { id: sessaoId } = use(params);
   const router = useRouter();
   
-  const [sessao, setSessao] = useState<any>(null);
-  const [itens, setItens] = useState<any[]>([]);
+  const [sessao, setSessao] = useState<Sessao | null>(null);
+  const [itens, setItens] = useState<ItemCapturado[]>([]);
   const [buscando, setBuscando] = useState(false);
   const [msgFeedback, setMsgFeedback] = useState({ tipo: '', texto: '' });
 
-  useEffect(() => {
-    buscarDadosSessao();
-  }, [sessaoId]);
-
-  async function buscarDadosSessao() {
+  const buscarDadosSessao = useCallback(async () => {
     const { data: sessaoData } = await supabase
       .from('sessoes_captura')
       .select('*')
@@ -30,24 +44,29 @@ export default function AuditoriaPage({ params }: PageProps) {
       .single();
 
     if (sessaoData) {
-      setSessao(sessaoData);
-      // Carrega itens já capturados caso o usuário atualize a página por acidente
+      setSessao(sessaoData as Sessao);
+      
       const { data: itensData } = await supabase
         .from('itens_capturados')
         .select('id, produtos(codigo_sistema, codigo_barras, descricao)')
         .eq('sessao_id', sessaoId)
         .order('id', { ascending: false });
       
-      if (itensData) setItens(itensData);
+      if (itensData) {
+        setItens(itensData as unknown as ItemCapturado[]);
+      }
     }
-  }
+  }, [sessaoId]);
+
+  useEffect(() => {
+    buscarDadosSessao();
+  }, [buscarDadosSessao]);
 
   async function handleBarcodeScan(barcode: string) {
-    if (buscando) return; // Debounce natural para evitar múltiplas requisições do mesmo código
+    if (buscando) return;
     setBuscando(true);
     setMsgFeedback({ tipo: '', texto: '' });
 
-    // 1. Busca o produto direto no banco pelo código de barras
     const { data: produto, error } = await supabase
       .from('produtos')
       .select('*')
@@ -60,7 +79,6 @@ export default function AuditoriaPage({ params }: PageProps) {
       return;
     }
 
-    // 2. Vincula o produto à sessão atual
     const { data: itemVinculado, error: insertError } = await supabase
       .from('itens_capturados')
       .insert([{ sessao_id: sessaoId, produto_id: produto.id }])
@@ -68,8 +86,7 @@ export default function AuditoriaPage({ params }: PageProps) {
       .single();
 
     if (!insertError && itemVinculado) {
-      // Adiciona no topo da lista visual para feedback imediato do operador
-      setItens((prev) => [itemVinculado, ...prev]);
+      setItens((prev) => [itemVinculado as unknown as ItemCapturado, ...prev]);
       setMsgFeedback({ tipo: 'sucesso', texto: `${produto.descricao} adicionado!` });
     }
     
@@ -82,13 +99,17 @@ export default function AuditoriaPage({ params }: PageProps) {
       return;
     }
     await supabase.from('sessoes_captura').update({ status: 'salvo' }).eq('id', sessaoId);
-    router.replace('/');
+    startTransition(() => {
+      router.replace('/');
+    });
   }
 
   async function cancelarSessao() {
     if (confirm("Deseja realmente cancelar? Todas as capturas desta sessão serão perdidas.")) {
       await supabase.from('sessoes_captura').delete().eq('id', sessaoId);
-      router.replace('/');
+      startTransition(() => {
+        router.replace('/');
+      });
     }
   }
 
@@ -96,7 +117,6 @@ export default function AuditoriaPage({ params }: PageProps) {
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-50 p-4 max-w-md mx-auto flex flex-col gap-4">
-      {/* Header Info */}
       <div className="flex justify-between items-center bg-zinc-900 border border-zinc-800 rounded-xl p-3 shadow-inner">
         <div>
           <p className="text-xs text-zinc-500 uppercase tracking-wider font-semibold">Código Interno</p>
@@ -110,10 +130,8 @@ export default function AuditoriaPage({ params }: PageProps) {
         </div>
       </div>
 
-      {/* Câmera / Scanner */}
       <BarcodeScanner onScanSuccess={handleBarcodeScan} />
 
-      {/* Status Dinâmico */}
       {buscando && (
         <div className="flex items-center justify-center gap-2 text-zinc-400 text-sm py-1 bg-zinc-900/50 rounded-lg">
           <Loader2 className="w-4 h-4 animate-spin text-emerald-400" /> Consultando banco...
@@ -128,7 +146,6 @@ export default function AuditoriaPage({ params }: PageProps) {
         </div>
       )}
 
-      {/* Listagem em Tempo Real */}
       <section className="flex-1 flex flex-col gap-2 overflow-hidden">
         <div className="flex items-center justify-between border-b border-zinc-800 pb-1">
           <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500 flex items-center gap-1">
@@ -154,7 +171,6 @@ export default function AuditoriaPage({ params }: PageProps) {
         </div>
       </section>
 
-      {/* Ações Fixas de Rodapé */}
       <footer className="grid grid-cols-2 gap-3 pt-2 bg-zinc-950 border-t border-zinc-900">
         <button
           onClick={cancelarSessao}

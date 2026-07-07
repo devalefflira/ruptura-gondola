@@ -10,12 +10,11 @@ export default function BarcodeScanner({ onScanSuccess }: BarcodeScannerProps) {
   const scannerRef = useRef<Html5QrcodeScanner | null>(null);
 
   useEffect(() => {
-    // Configuração otimizada para códigos de barras comerciais de supermercado (EAN-13, EAN-8, UPC)
     scannerRef.current = new Html5QrcodeScanner(
       'reader',
       {
-        fps: 20, // FPS alto para captura rápida em movimento na gôndola
-        qrbox: { width: 300, height: 150 }, // Formato retangular ideal para barras
+        fps: 20,
+        qrbox: { width: 300, height: 150 },
         formatsToSupport: [
           Html5QrcodeSupportedFormats.EAN_13,
           Html5QrcodeSupportedFormats.EAN_8,
@@ -30,11 +29,10 @@ export default function BarcodeScanner({ onScanSuccess }: BarcodeScannerProps) {
     scannerRef.current.render(
       (text) => {
         onScanSuccess(text);
-        // Feedback tátil simples (vibração) se o dispositivo suportar
         if (navigator.vibrate) navigator.vibrate(100);
       },
-      (error) => {
-        // Ignora erros de frame não lidos para não travar a aplicação
+      () => {
+        // Callback de erro de leitura de frame vazia para não poluir o console ou estourar a regra do ESLint
       }
     );
 

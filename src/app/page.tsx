@@ -1,35 +1,53 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, startTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { Play, Download, Layers, Calendar } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
+interface SessaoCaptura {
+  id: string;
+  codigo_sessao: string;
+  data_inicio: string;
+  status: string;
+  itens_capturados: { count: number }[];
+}
+
+interface ItemExportacao {
+  capturado_em: string;
+  produtos: {
+    codigo_sistema: string;
+    codigo_barras: string;
+    descricao: string;
+  } | null;
+}
+
 export default function Dashboard() {
   const router = useRouter();
-  const [sessoes, setSessoes] = useState<any[]>([]);
+  const [sessoes, setSessoes] = useState<SessaoCaptura[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    async function buscarSessoes() {
+      const { data, error } = await supabase
+        .from('sessoes_captura')
+        .select(`
+          id, codigo_sessao, data_inicio, status,
+          itens_capturados(count)
+        `)
+        .eq('status', 'salvo')
+        .order('data_inicio', { ascending: false });
+
+      if (!error && data) {
+        setSessoes(data as unknown as SessaoCaptura[]);
+      }
+      setLoading(false);
+    }
+    
     buscarSessoes();
   }, []);
 
-  async function buscarSessoes() {
-    const { data, error } = await supabase
-      .from('sessoes_captura')
-      .select(`
-        id, codigo_sessao, data_inicio, status,
-        itens_capturados(count)
-      `)
-      .eq('status', 'salvo')
-      .order('data_inicio', { ascending: false });
-
-    if (!error && data) setSessoes(data);
-    setLoading(false);
-  }
-
   async function iniciarNovaCaptura() {
-    // Chama a função RPC criada no banco para gerar um código curto randômico
     const { data: codigoAleatorio } = await supabase.rpc('gerar_codigo_sessao');
     const codigo = codigoAleatorio || Math.random().toString(36).substring(2, 8).toUpperCase();
 
@@ -40,7 +58,9 @@ export default function Dashboard() {
       .single();
 
     if (!error && data) {
-      router.push(`/auditoria/${data.id}`);
+      startTransition(() => {
+        router.push(`/auditoria/${data.id}`);
+      });
     }
   }
 
@@ -55,11 +75,12 @@ export default function Dashboard() {
 
     if (error || !data) return alert('Erro ao buscar dados para exportação');
 
-    // Mapeia os dados achatando a estrutura do banco para colunas da planilha
-    const dadosPlanilha = data.map((item: any) => ({
-      'Código Sistema': item.produtos?.codigo_sistema,
-      'Código de Barras': item.produtos?.codigo_barras,
-      'Descrição': item.produtos?.descricao,
+    const itens = data as unknown as ItemExportacao[];
+
+    const dadosPlanilha = itens.map((item) => ({
+      'Código Sistema': item.produtos?.codigo_sistema || '',
+      'Código de Barras': item.produtos?.codigo_barras || '',
+      'Descrição': item.produtos?.descricao || '',
       'Data/Hora Captura': new Date(item.capturado_em).toLocaleString('pt-BR')
     }));
 
