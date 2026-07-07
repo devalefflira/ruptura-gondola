@@ -62,7 +62,7 @@ export default function BarcodeScanner({ onScanSuccess }: BarcodeScannerProps) {
 
   return (
     <div className="w-full max-w-md mx-auto bg-black rounded-xl overflow-hidden shadow-lg border border-zinc-800">
-      <div id="reader" className="w-full aspect-[4/3]"></div>
+      <div id="reader" className="w-full aspect-4/3"></div>
     </div>
   );
 }

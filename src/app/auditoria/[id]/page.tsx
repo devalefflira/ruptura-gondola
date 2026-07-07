@@ -65,8 +65,7 @@ export default function AuditoriaPage({ params }: PageProps) {
   async function handleBarcodeScan(barcode: string) {
     if (buscando) return;
     
-    // REGRA DE OURO PARA GÔNDOLA: Se o primeiro item da lista (último bipado) 
-    // já for este mesmo código de barras, ignora o bipe imediatamente.
+    // Trava de segurança para impedir bipes repetidos em loop do mesmo produto
     if (itens.length > 0 && itens[0].produtos?.codigo_barras === barcode) {
       return;
     }
@@ -86,14 +85,13 @@ export default function AuditoriaPage({ params }: PageProps) {
       return;
     }
 
-    // Validação extra caso a lista tenha atualizado durante a consulta ao banco
     setItens((prev) => {
       if (prev.length > 0 && prev[0].produtos?.codigo_barras === barcode) {
         setBuscando(false);
         return prev;
       }
 
-      // Se passou por todas as travas, insere no banco do Supabase de fato
+      // Salva de forma assíncrona direto no Supabase
       supabase
         .from('itens_capturados')
         .insert([{ sessao_id: sessaoId, produto_id: produto.id }])
@@ -102,7 +100,7 @@ export default function AuditoriaPage({ params }: PageProps) {
       setMsgFeedback({ tipo: 'sucesso', texto: `${produto.descricao} adicionado!` });
       
       const novoItem: ItemCapturado = {
-        id: Date.now(), // ID temporário para renderizar na tela instantaneamente
+        id: Date.now(),
         produtos: {
           codigo_sistema: produto.codigo_sistema,
           codigo_barras: produto.codigo_barras,
@@ -112,6 +110,17 @@ export default function AuditoriaPage({ params }: PageProps) {
 
       setBuscando(false);
       return [novoItem, ...prev];
+    });
+  }
+
+  async function finalizarSessao() {
+    if (itens.length === 0) {
+      alert("Capture ao menos um produto antes de salvar.");
+      return;
+    }
+    await supabase.from('sessoes_captura').update({ status: 'salvo' }).eq('id', sessaoId);
+    startTransition(() => {
+      router.replace('/');
     });
   }
 
