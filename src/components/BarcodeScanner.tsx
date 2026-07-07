@@ -8,8 +8,6 @@ interface BarcodeScannerProps {
 
 export default function BarcodeScanner({ onScanSuccess }: BarcodeScannerProps) {
   const html5QrcodeRef = useRef<Html5Qrcode | null>(null);
-  const ultimoCodigoRef = useRef<string>('');
-  const ultimaLeituraTimeRef = useRef<number>(0);
 
   useEffect(() => {
     const scannerId = "reader";
@@ -31,18 +29,6 @@ export default function BarcodeScanner({ onScanSuccess }: BarcodeScannerProps) {
       { facingMode: "environment" },
       config,
       (text) => {
-        const agora = Date.now();
-        
-        // Se for o mesmo código e fizer menos de 3 segundos (3000ms), ignora o frame
-        if (text === ultimoCodigoRef.current && (agora - ultimaLeituraTimeRef.current) < 3000) {
-          return;
-        }
-
-        // Atualiza as referências de controle de leitura
-        ultimoCodigoRef.current = text;
-        ultimaLeituraTimeRef.current = agora;
-
-        // Dispara a função de sucesso
         onScanSuccess(text);
         if (navigator.vibrate) navigator.vibrate(100);
       },
@@ -50,7 +36,7 @@ export default function BarcodeScanner({ onScanSuccess }: BarcodeScannerProps) {
         // Ignora frames não lidos
       }
     ).catch((err) => {
-      console.error("Erro ao iniciar a câmera automaticamente:", err);
+      console.error("Erro ao iniciar a câmera:", err);
     });
 
     return () => {

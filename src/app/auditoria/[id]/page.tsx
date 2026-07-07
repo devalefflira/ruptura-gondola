@@ -2,8 +2,8 @@
 import { useEffect, useState, use, useCallback, startTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import BarcodeScanner from '@/components/BarcodeScanner';
-import { Check, X, Barcode, ClipboardList, Loader2 } from 'lucide-react';
+import BarcodeScanner from '../../../components/BarcodeScanner';
+import { Check, X, Barcode, ClipboardList, Loader2, Camera } from 'lucide-react';
 
 interface Produto {
   codigo_sistema: string;
@@ -34,6 +34,7 @@ export default function AuditoriaPage({ params }: PageProps) {
   const [sessao, setSessao] = useState<Sessao | null>(null);
   const [itens, setItens] = useState<ItemCapturado[]>([]);
   const [buscando, setBuscando] = useState(false);
+  const [cameraAberta, setCameraAberta] = useState(false);
   const [msgFeedback, setMsgFeedback] = useState({ tipo: '', texto: '' });
 
   const buscarDadosSessao = useCallback(async () => {
@@ -65,8 +66,10 @@ export default function AuditoriaPage({ params }: PageProps) {
   async function handleBarcodeScan(barcode: string) {
     if (buscando) return;
     
-    // Trava de segurança para impedir bipes repetidos em loop do mesmo produto
+    setCameraAberta(false);
+
     if (itens.length > 0 && itens[0].produtos?.codigo_barras === barcode) {
+      setMsgFeedback({ tipo: 'sucesso', texto: `Produto já consta no topo da lista.` });
       return;
     }
 
@@ -91,7 +94,6 @@ export default function AuditoriaPage({ params }: PageProps) {
         return prev;
       }
 
-      // Salva de forma assíncrona direto no Supabase
       supabase
         .from('itens_capturados')
         .insert([{ sessao_id: sessaoId, produto_id: produto.id }])
@@ -150,7 +152,30 @@ export default function AuditoriaPage({ params }: PageProps) {
         </div>
       </div>
 
-      <BarcodeScanner onScanSuccess={handleBarcodeScan} />
+      {cameraAberta ? (
+        <div className="relative">
+          <BarcodeScanner onScanSuccess={handleBarcodeScan} />
+          <button 
+            onClick={() => setCameraAberta(false)}
+            className="absolute top-3 right-3 bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 text-xs font-semibold px-3 py-1.5 rounded-lg shadow-md active:scale-95 transition-transform"
+          >
+            Fechar Câmera
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => {
+            setMsgFeedback({ tipo: '', texto: '' });
+            setCameraAberta(true);
+          }}
+          className="w-full aspect-4/3 max-w-md mx-auto bg-zinc-900/40 hover:bg-zinc-900 border-2 border-dashed border-zinc-800 hover:border-zinc-700 rounded-xl flex flex-col items-center justify-center gap-3 text-zinc-400 hover:text-zinc-300 transition-colors active:scale-[0.99]"
+        >
+          <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-full shadow-md text-emerald-400">
+            <Camera className="w-8 h-8" />
+          </div>
+          <span className="font-semibold text-sm tracking-wide">Escanear Produto</span>
+        </button>
+      )}
 
       {buscando && (
         <div className="flex items-center justify-center gap-2 text-zinc-400 text-sm py-1 bg-zinc-900/50 rounded-lg">
@@ -176,7 +201,7 @@ export default function AuditoriaPage({ params }: PageProps) {
 
         <div className="flex-1 overflow-y-auto space-y-2 pr-1 max-h-[35vh]">
           {itens.length === 0 ? (
-            <div className="text-center text-zinc-600 text-sm py-8">Aponte a câmera para as etiquetas de preço.</div>
+            <div className="text-center text-zinc-600 text-sm py-8">Clique no botão acima para iniciar a leitura.</div>
           ) : (
             itens.map((item) => (
               <div key={item.id} className="bg-zinc-900/80 border border-zinc-800/60 rounded-lg p-3 flex flex-col gap-1 shadow-sm">
