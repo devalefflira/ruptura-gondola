@@ -67,14 +67,16 @@ export default function AuditoriaPage({ params }: PageProps) {
     if (buscando) return;
     
     setCameraAberta(false);
+    setMsgFeedback({ tipo: '', texto: '' });
 
-    if (itens.length > 0 && itens[0].produtos?.codigo_barras === barcode) {
-      setMsgFeedback({ tipo: 'sucesso', texto: `Produto já consta no topo da lista.` });
+    // REGRA DE VALIDAÇÃO: Bloqueia a inserção se o código já existir em qualquer posição desta sessão
+    const codigoJaExiste = itens.some(item => item.produtos?.codigo_barras === barcode);
+    if (codigoJaExiste) {
+      setMsgFeedback({ tipo: 'erro', texto: `Código ${barcode} já capturado nesta sessão!` });
       return;
     }
 
     setBuscando(true);
-    setMsgFeedback({ tipo: '', texto: '' });
 
     const { data: produto, error } = await supabase
       .from('produtos')
@@ -88,8 +90,9 @@ export default function AuditoriaPage({ params }: PageProps) {
       return;
     }
 
+    // Validação secundária concorrente de segurança
     setItens((prev) => {
-      if (prev.length > 0 && prev[0].produtos?.codigo_barras === barcode) {
+      if (prev.some(item => item.produtos?.codigo_barras === barcode)) {
         setBuscando(false);
         return prev;
       }

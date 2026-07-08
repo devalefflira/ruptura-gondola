@@ -2,7 +2,7 @@
 import { useEffect, useState, startTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { Play, Download, Layers, Calendar, AlertTriangle, Eye, X } from 'lucide-react';
+import { Play, Download, Layers, Calendar, AlertTriangle, Eye, X, ClipboardList } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 interface SessaoCaptura {
@@ -19,16 +19,31 @@ interface ItemFalta {
   descricao: string;
 }
 
+interface ItemCapturado {
+  produtos: {
+    codigo_sistema: string;
+    codigo_barras: string;
+    descricao: string;
+  } | null;
+}
+
 export default function Dashboard() {
   const router = useRouter();
   const [sessoes, setSessoes] = useState<SessaoCaptura[]>([]);
   const [loading, setLoading] = useState(true);
   
-  // Estados para o Modal de consulta rápida no celular
-  const [modalAberto, setModalAberto] = useState(false);
+  // Controle do Modal 1: Faltas do Depósito
+  const [modalFaltasAberto, setModalFaltasAberto] = useState(false);
   const [itensFaltantes, setItensFaltantes] = useState<ItemFalta[]>([]);
   const [carregandoFaltas, setCarregandoFaltas] = useState(false);
-  const [sessaoSelecionada, setSessaoSelecionada] = useState('');
+
+  // Controle do Modal 2: Listagem de Itens Capturados
+  const [modalItensAberto, setModalItensAberto] = useState(false);
+  const [itensCapturados, setItensCapturados] = useState<ItemCapturado[]>([]);
+  const [carregandoItens, setCarregandoItens] = useState(false);
+
+  const [sessaoSelecionadaId, setSessaoSelecionadaId] = useState('');
+  const [sessaoSelecionadaCodigo, setSessaoSelecionadaCodigo] = useState('');
 
   useEffect(() => {
     async function buscarSessoes() {
@@ -67,13 +82,12 @@ export default function Dashboard() {
     }
   }
 
-  // Consulta inteligente chamando a RPC por Sessão
+  // Abre Modal 1: Busca rupturas calculadas na RPC
   async function verItensFaltantes(sessaoId: string, codigoSessao: string) {
-    setSessaoSelecionada(codigoSessao);
+    setSessaoSelecionadaCodigo(codigoSessao);
     setCarregandoFaltas(true);
-    setModalAberto(true);
+    setModalFaltasAberto(true);
 
-    // Executa a função RPC passando o ID da sessão atual como parâmetro
     const { data, error } = await supabase
       .rpc('obter_faltas_deposito', { p_sessao_id: sessaoId });
 
@@ -85,27 +99,41 @@ export default function Dashboard() {
     setCarregandoFaltas(false);
   }
 
-  // Exporta a planilha contextualmente baseada apenas na categoria da contagem atual
-  async function exportarFaltasXLSX(sessaoId: string, codigoSessao: string) {
-    // Executa a mesma RPC para buscar os dados consolidados da planilha
+  // Abre Modal 2: Busca os itens bipados reais salvos no banco
+  async function verItensCapturados(sessaoId: string, codigoSessao: string) {
+    setSessaoSelecionadaId(sessaoId);
+    setSessaoSelecionadaCodigo(codigoSessao);
+    setCarregandoItens(true);
+    setModalItensAberto(true);
+
     const { data, error } = await supabase
-      .rpc('obter_faltas_deposito', { p_sessao_id: sessaoId });
+      .from('itens_capturados')
+      .select('produtos(codigo_sistema, codigo_barras, descricao)')
+      .eq('sessao_id', sessaoId);
 
-    if (error || !data || data.length === 0) {
-      return alert('Nenhum item pendente de abastecimento encontrado para esta categoria.');
+    if (!error && data) {
+      setItensCapturados(data as unknown as ItemCapturado[]);
+    } else {
+      setItensCapturados([]);
     }
+    setCarregandoItens(false);
+  }
 
-    const dadosPlanilha = (data as ItemFalta[]).map((item) => ({
-      'Código Sistema': item.codigo_sistema,
-      'Código de Barras': item.codigo_barras,
-      'Descrição': item.descricao,
-      'Ação Recomendada': 'Puxar do Depósito para Gôndola'
+  // Baixa o XLSX de dentro do modal de capturas
+  async function exportarCapturasXLSX() {
+    if (itensCapturados.length === 0) return alert('Sem dados para exportar');
+
+    const dadosPlanilha = itensCapturados.map((item) => ({
+      'Código Sistema': item.produtos?.codigo_sistema || '',
+      'Código de Barras': item.produtos?.codigo_barras || '',
+      'Descrição': item.produtos?.descricao || '',
+      'Status': 'Confirmado na Gôndola'
     }));
 
     const ws = XLSX.utils.json_to_sheet(dadosPlanilha);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Faltas Deposito");
-    XLSX.writeFile(wb, `Faltas_Deposito_Sessao_${codigoSessao}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, "Itens Auditados");
+    XLSX.writeFile(wb, `Auditoria_Gondola_${sessaoSelecionadaCodigo}.xlsx`);
   }
 
   return (
@@ -152,19 +180,18 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* Ações Inteligentes no Chão de Loja */}
                 <div className="grid grid-cols-2 gap-2 border-t border-zinc-800/60 pt-2">
                   <button
                     onClick={() => verItensFaltantes(sessao.id, sessao.codigo_sessao)}
                     className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 font-semibold py-2 px-3 text-xs rounded-lg border border-amber-500/20 flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
                   >
-                    <Eye className="w-3.5 h-3.5" /> Ver Faltas Depósito
+                    <AlertTriangle className="w-3.5 h-3.5" /> Ver Faltas Depósito
                   </button>
                   <button
-                    onClick={() => exportarFaltasXLSX(sessao.id, sessao.codigo_sessao)}
+                    onClick={() => verItensCapturados(sessao.id, sessao.codigo_sessao)}
                     className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold py-2 px-3 text-xs rounded-lg border border-zinc-700 flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
                   >
-                    <Download className="w-3.5 h-3.5" /> Exportar .XLSX
+                    <ClipboardList className="w-3.5 h-3.5" /> Listagem de Itens
                   </button>
                 </div>
               </div>
@@ -173,18 +200,18 @@ export default function Dashboard() {
         )}
       </section>
 
-      {/* MODAL DE CONSULTA RÁPIDA NO CELULAR */}
-      {modalAberto && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fade-in">
+      {/* MODAL 1: PRODUTOS FALTANTES NO ESTOQUE */}
+      {modalFaltasAberto && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="bg-zinc-900 border border-zinc-800 w-full max-w-md rounded-t-2xl sm:rounded-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
             <header className="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/50">
               <div>
                 <h3 className="text-base font-bold text-amber-400 flex items-center gap-1.5">
                   <AlertTriangle className="w-4 h-4" /> Trazer do Depósito
                 </h3>
-                <p className="text-xs text-zinc-400">Sessão: {sessaoSelecionada} • Teve entrada mas não está na gôndola</p>
+                <p className="text-xs text-zinc-400">Sessão: {sessaoSelecionadaCodigo}</p>
               </div>
-              <button onClick={() => setModalAberto(false)} className="bg-zinc-800 text-zinc-400 p-1.5 rounded-lg border border-zinc-700">
+              <button onClick={() => setModalFaltasAberto(false)} className="bg-zinc-800 text-zinc-400 p-1.5 rounded-lg border border-zinc-700">
                 <X className="w-4 h-4" />
               </button>
             </header>
@@ -208,15 +235,55 @@ export default function Dashboard() {
                 ))
               )}
             </div>
+          </div>
+        </div>
+      )}
 
-            <footer className="p-4 bg-zinc-900 border-t border-zinc-800">
-              <button
-                onClick={() => setModalAberto(false)}
-                className="w-full bg-zinc-800 hover:bg-zinc-700 font-bold py-3 rounded-xl transition-colors text-zinc-200"
-              >
-                Voltar ao Painel
-              </button>
-            </footer>
+      {/* MODAL 2: PRODUTOS CAPTURADOS NA GÔNDOLA */}
+      {modalItensAberto && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div className="bg-zinc-900 border border-zinc-800 w-full max-w-md rounded-t-2xl sm:rounded-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <header className="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/50">
+              <div>
+                <h3 className="text-base font-bold text-emerald-400 flex items-center gap-1.5">
+                  <ClipboardList className="w-4 h-4" /> Itens Capturados
+                </h3>
+                <p className="text-xs text-zinc-400">Sessão: {sessaoSelecionadaCodigo}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={exportarCapturasXLSX}
+                  disabled={itensCapturados.length === 0}
+                  className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-40 text-zinc-950 font-bold p-2 rounded-lg text-xs flex items-center gap-1 shadow transition-colors"
+                  title="Exportar Planilha"
+                >
+                  <Download className="w-3.5 h-3.5 stroke-[2.5]" /> .XLSX
+                </button>
+                <button onClick={() => setModalItensAberto(false)} className="bg-zinc-800 text-zinc-400 p-1.5 rounded-lg border border-zinc-700">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </header>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-2 bg-zinc-950/40">
+              {carregandoItens ? (
+                <div className="text-center py-12 text-sm text-zinc-500">Buscando itens na base...</div>
+              ) : itensCapturados.length === 0 ? (
+                <div className="text-center py-12 border border-dashed border-zinc-800 rounded-xl text-zinc-500 text-sm">
+                  Nenhum produto foi bipado nesta sessão.
+                </div>
+              ) : (
+                itensCapturados.map((item, idx) => (
+                  <div key={idx} className="bg-zinc-900 border border-zinc-800/60 rounded-xl p-3 flex flex-col gap-1 shadow-sm">
+                    <span className="text-sm font-semibold text-zinc-200 line-clamp-1">{item.produtos?.descricao}</span>
+                    <div className="flex justify-between items-center text-xs text-zinc-500 font-mono">
+                      <span>EAN: {item.produtos?.codigo_barras}</span>
+                      <span>Cod: {item.produtos?.codigo_sistema}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}
