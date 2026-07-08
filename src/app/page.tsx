@@ -2,7 +2,7 @@
 import { useEffect, useState, startTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { Play, Download, Layers, Calendar, AlertTriangle, Eye, X, ClipboardList } from 'lucide-react';
+import { Play, Download, Layers, Calendar, AlertTriangle, Eye, X, ClipboardList, ThumbsUp, ThumbsDown, FileSpreadsheet } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 interface SessaoCaptura {
@@ -17,6 +17,7 @@ interface ItemFalta {
   codigo_sistema: string;
   codigo_barras: string;
   descricao: string;
+  status_conferencia: 'encontrado' | 'nao_encontrado' | null;
 }
 
 interface ItemCapturado {
@@ -32,12 +33,11 @@ export default function Dashboard() {
   const [sessoes, setSessoes] = useState<SessaoCaptura[]>([]);
   const [loading, setLoading] = useState(true);
   
-  // Controle do Modal 1: Faltas do Depósito
+  // Modais
   const [modalFaltasAberto, setModalFaltasAberto] = useState(false);
   const [itensFaltantes, setItensFaltantes] = useState<ItemFalta[]>([]);
   const [carregandoFaltas, setCarregandoFaltas] = useState(false);
 
-  // Controle do Modal 2: Listagem de Itens Capturados
   const [modalItensAberto, setModalItensAberto] = useState(false);
   const [itensCapturados, setItensCapturados] = useState<ItemCapturado[]>([]);
   const [carregandoItens, setCarregandoItens] = useState(false);
@@ -82,8 +82,8 @@ export default function Dashboard() {
     }
   }
 
-  // Abre Modal 1: Busca rupturas calculadas na RPC
   async function verItensFaltantes(sessaoId: string, codigoSessao: string) {
+    setSessaoSelecionadaId(sessaoId);
     setSessaoSelecionadaCodigo(codigoSessao);
     setCarregandoFaltas(true);
     setModalFaltasAberto(true);
@@ -99,7 +99,46 @@ export default function Dashboard() {
     setCarregandoFaltas(false);
   }
 
-  // Abre Modal 2: Busca os itens bipados reais salvos no banco
+  // Grava a ação de ThumbsUp ou ThumbsDown no Supabase
+  async function handleVotoDeposito(barcode: string, statusVoto: 'encontrado' | 'nao_encontrado') {
+    // Atualiza o estado local imediatamente (UI reativa rápida)
+    setItensFaltantes(prev => 
+      prev.map(item => item.codigo_barras === barcode ? { ...item, status_conferencia: statusVoto } : item)
+    );
+
+    // Salva no banco de dados com UPSERT (insere ou atualiza se já existir)
+    await supabase
+      .from('conferencia_deposito')
+      .upsert({
+        sessao_id: sessaoSelecionadaId,
+        codigo_barras: barcode,
+        status_conferencia: statusVoto
+      }, { onConflict: 'sessao_id,codigo_barras' });
+  }
+
+  // Gera o relatório de auditoria completo, categorizando o que foi achado ou não
+  async function exportarRelatorioConferenciaXLSX() {
+    if (itensFaltantes.length === 0) return alert('Sem dados para exportar');
+
+    const dadosPlanilha = itensFaltantes.map((item) => {
+      let statusTexto = 'Pendente de Verificação';
+      if (item.status_conferencia === 'encontrado') statusTexto = 'Encontrado no Depósito e Abastecido';
+      if (item.status_conferencia === 'nao_encontrado') statusTexto = 'Ruptura Real (Não encontrado no Depósito)';
+
+      return {
+        'Código Sistema': item.codigo_sistema,
+        'Código de Barras': item.codigo_barras,
+        'Descrição': item.descricao,
+        'Situação no Depósito': statusTexto
+      };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(dadosPlanilha);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Conferência Depósito");
+    XLSX.writeFile(wb, `Relatorio_Deposito_Sessao_${sessaoSelecionadaCodigo}.xlsx`);
+  }
+
   async function verItensCapturados(sessaoId: string, codigoSessao: string) {
     setSessaoSelecionadaId(sessaoId);
     setSessaoSelecionadaCodigo(codigoSessao);
@@ -119,7 +158,6 @@ export default function Dashboard() {
     setCarregandoItens(false);
   }
 
-  // Baixa o XLSX de dentro do modal de capturas
   async function exportarCapturasXLSX() {
     if (itensCapturados.length === 0) return alert('Sem dados para exportar');
 
@@ -200,7 +238,7 @@ export default function Dashboard() {
         )}
       </section>
 
-      {/* MODAL 1: PRODUTOS FALTANTES NO ESTOQUE */}
+      {/* MODAL 1: PRODUTOS FALTANTES NO ESTOQUE (COM CAPTURA DE VOTOS) */}
       {modalFaltasAberto && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="bg-zinc-900 border border-zinc-800 w-full max-w-md rounded-t-2xl sm:rounded-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
@@ -225,16 +263,53 @@ export default function Dashboard() {
                 </div>
               ) : (
                 itensFaltantes.map((item, idx) => (
-                  <div key={idx} className="bg-zinc-900 border border-zinc-800/60 rounded-xl p-3 flex flex-col gap-1 shadow-sm">
-                    <span className="text-sm font-semibold text-zinc-200 line-clamp-1">{item.descricao}</span>
-                    <div className="flex justify-between items-center text-xs text-zinc-500 font-mono">
-                      <span>EAN: {item.codigo_barras}</span>
-                      <span>Cod: {item.codigo_sistema}</span>
+                  <div key={idx} className="bg-zinc-900 border border-zinc-800/60 rounded-xl p-3 flex items-center justify-between shadow-sm gap-2">
+                    <div className="flex flex-col gap-1 flex-1 min-w-0">
+                      <span className="text-sm font-semibold text-zinc-200 line-clamp-2">{item.descricao}</span>
+                      <span className="text-xs text-zinc-500 font-mono">EAN: {item.codigo_barras}</span>
+                    </div>
+
+                    {/* BOTÕES DE CONFERÊNCIA FÍSICA NO DEPÓSITO */}
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => handleVotoDeposito(item.codigo_barras, 'encontrado')}
+                        className={`p-2 rounded-lg border transition-all active:scale-90 ${
+                          item.status_conferencia === 'encontrado'
+                            ? 'bg-emerald-500 text-zinc-950 border-emerald-400 shadow-md shadow-emerald-950/40'
+                            : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700'
+                        }`}
+                        title="Encontrei e peguei"
+                      >
+                        <ThumbsUp className="w-4 h-4 stroke-[2.5]" />
+                      </button>
+                      <button
+                        onClick={() => handleVotoDeposito(item.codigo_barras, 'nao_encontrado')}
+                        className={`p-2 rounded-lg border transition-all active:scale-90 ${
+                          item.status_conferencia === 'nao_encontrado'
+                            ? 'bg-red-500 text-zinc-50 border-red-400 shadow-md shadow-red-950/40'
+                            : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700'
+                        }`}
+                        title="Não encontrei no depósito"
+                      >
+                        <ThumbsDown className="w-4 h-4 stroke-[2.5]" />
+                      </button>
                     </div>
                   </div>
                 ))
               )}
             </div>
+
+            {/* BOTÃO DA ÁREA DE RELATÓRIOS INTEGRADO NO RODAPÉ */}
+            {itensFaltantes.length > 0 && (
+              <footer className="p-4 bg-zinc-900 border-t border-zinc-800">
+                <button
+                  onClick={exportarRelatorioConferenciaXLSX}
+                  className="w-full bg-amber-500 hover:bg-amber-600 text-zinc-950 font-bold py-3 rounded-xl transition-all active:scale-[0.99] flex items-center justify-center gap-2 text-sm shadow-md shadow-amber-950/20"
+                >
+                  <FileSpreadsheet className="w-4 h-4 stroke-[2.5]" /> Exportar Relatório de Conferência
+                </button>
+              </footer>
+            )}
           </div>
         </div>
       )}
@@ -255,7 +330,6 @@ export default function Dashboard() {
                   onClick={exportarCapturasXLSX}
                   disabled={itensCapturados.length === 0}
                   className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-40 text-zinc-950 font-bold p-2 rounded-lg text-xs flex items-center gap-1 shadow transition-colors"
-                  title="Exportar Planilha"
                 >
                   <Download className="w-3.5 h-3.5 stroke-[2.5]" /> .XLSX
                 </button>
