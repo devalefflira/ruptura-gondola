@@ -67,33 +67,35 @@ export default function Dashboard() {
     }
   }
 
-  // Consulta em tempo real na View do banco o que falta buscar no depósito
+  // Consulta inteligente chamando a RPC por Sessão
   async function verItensFaltantes(sessaoId: string, codigoSessao: string) {
     setSessaoSelecionada(codigoSessao);
     setCarregandoFaltas(true);
     setModalAberto(true);
 
+    // Executa a função RPC passando o ID da sessão atual como parâmetro
     const { data, error } = await supabase
-      .from('relatorio_faltas_deposito')
-      .select('codigo_sistema, codigo_barras, descricao')
-      .eq('sessao_id', sessaoId);
+      .rpc('obter_faltas_deposito', { p_sessao_id: sessaoId });
 
     if (!error && data) {
       setItensFaltantes(data as ItemFalta[]);
+    } else {
+      setItensFaltantes([]);
     }
     setCarregandoFaltas(false);
   }
 
-  // Exporta a planilha focada nas mercadorias que estão presas no depósito
+  // Exporta a planilha contextualmente baseada apenas na categoria da contagem atual
   async function exportarFaltasXLSX(sessaoId: string, codigoSessao: string) {
+    // Executa a mesma RPC para buscar os dados consolidados da planilha
     const { data, error } = await supabase
-      .from('relatorio_faltas_deposito')
-      .select('codigo_sistema, codigo_barras, descricao')
-      .eq('sessao_id', sessaoId);
+      .rpc('obter_faltas_deposito', { p_sessao_id: sessaoId });
 
-    if (error || !data) return alert('Erro ao buscar dados de faltas');
+    if (error || !data || data.length === 0) {
+      return alert('Nenhum item pendente de abastecimento encontrado para esta categoria.');
+    }
 
-    const dadosPlanilha = data.map((item) => ({
+    const dadosPlanilha = (data as ItemFalta[]).map((item) => ({
       'Código Sistema': item.codigo_sistema,
       'Código de Barras': item.codigo_barras,
       'Descrição': item.descricao,
