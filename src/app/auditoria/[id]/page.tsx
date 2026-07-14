@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, use, useCallback, startTransition } from 'react';
+import { useEffect, useState, use, useCallback, startTransition, useRef} from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import BarcodeScanner from '../../../components/BarcodeScanner';
@@ -63,20 +63,27 @@ export default function AuditoriaPage({ params }: PageProps) {
     buscarDadosSessao();
   }, [buscarDadosSessao]);
 
-  async function handleBarcodeScan(barcode: string) {
-    if (buscando) return;
-    
-    setCameraAberta(false);
-    setMsgFeedback({ tipo: '', texto: '' });
+  // Adicione esta referência logo abaixo dos outros useState no topo do componente:
+  const escaneandoRef = useRef(false);
 
-    // REGRA DE VALIDAÇÃO: Bloqueia a inserção se o código já existir em qualquer posição desta sessão
+  // Substitua a função handleBarcodeScan por esta:
+  async function handleBarcodeScan(barcode: string) {
+    // Se já estiver processando um bipe, ignora frames concorrentes imediatamente
+    if (buscando || escaneandoRef.current) return;
+    
+    escaneandoRef.current = true;
+    setCameraAberta(false); // Desmonta o componente da câmera primeiro
+
+    // Validação de duplicidade na mesma sessão
     const codigoJaExiste = itens.some(item => item.produtos?.codigo_barras === barcode);
     if (codigoJaExiste) {
       setMsgFeedback({ tipo: 'erro', texto: `Código ${barcode} já capturado nesta sessão!` });
+      escaneandoRef.current = false;
       return;
     }
 
     setBuscando(true);
+    setMsgFeedback({ tipo: '', texto: '' });
 
     const { data: produto, error } = await supabase
       .from('produtos')
@@ -87,21 +94,16 @@ export default function AuditoriaPage({ params }: PageProps) {
     if (error || !produto) {
       setMsgFeedback({ tipo: 'erro', texto: `Produto não cadastrado: ${barcode}` });
       setBuscando(false);
+      escaneandoRef.current = false;
       return;
     }
 
-    // Validação secundária concorrente de segurança
-    setItens((prev) => {
-      if (prev.some(item => item.produtos?.codigo_barras === barcode)) {
-        setBuscando(false);
-        return prev;
-      }
+    // Vincula o item ao Supabase de forma isolada
+    const { error: insertError } = await supabase
+      .from('itens_capturados')
+      .insert([{ sessao_id: sessaoId, produto_id: produto.id }]);
 
-      supabase
-        .from('itens_capturados')
-        .insert([{ sessao_id: sessaoId, produto_id: produto.id }])
-        .then();
-
+    if (!insertError) {
       setMsgFeedback({ tipo: 'sucesso', texto: `${produto.descricao} adicionado!` });
       
       const novoItem: ItemCapturado = {
@@ -112,10 +114,17 @@ export default function AuditoriaPage({ params }: PageProps) {
           descricao: produto.descricao
         }
       };
+      
+      setItens((prev) => [novoItem, ...prev]);
+    } else {
+      setMsgFeedback({ tipo: 'erro', texto: 'Erro ao salvar o item no banco de dados.' });
+    }
 
-      setBuscando(false);
-      return [novoItem, ...prev];
-    });
+    setBuscando(false);
+    // Libera a trava síncrona após a conclusão do ciclo de renderização
+    setTimeout(() => {
+      escaneandoRef.current = false;
+    }, 300);
   }
 
   async function finalizarSessao() {

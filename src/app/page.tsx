@@ -2,8 +2,10 @@
 import { useEffect, useState, startTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { Play, Download, Layers, Calendar, AlertTriangle, Eye, X, ClipboardList, ThumbsUp, ThumbsDown, FileSpreadsheet } from 'lucide-react';
+import { Play, Download, Layers, Calendar, AlertTriangle, X, ClipboardList, ThumbsUp, ThumbsDown, FileSpreadsheet } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { jsPDF } from 'jspdf';
+import autoTable, { UserOptions } from 'jspdf-autotable'; // <-- Importa a função autoTable diretamente
 
 interface SessaoCaptura {
   id: string;
@@ -32,7 +34,7 @@ export default function Dashboard() {
   const router = useRouter();
   const [sessoes, setSessoes] = useState<SessaoCaptura[]>([]);
   const [loading, setLoading] = useState(true);
-  
+
   // Modais
   const [modalFaltasAberto, setModalFaltasAberto] = useState(false);
   const [itensFaltantes, setItensFaltantes] = useState<ItemFalta[]>([]);
@@ -61,7 +63,7 @@ export default function Dashboard() {
       }
       setLoading(false);
     }
-    
+
     buscarSessoes();
   }, []);
 
@@ -102,7 +104,7 @@ export default function Dashboard() {
   // Grava a ação de ThumbsUp ou ThumbsDown no Supabase
   async function handleVotoDeposito(barcode: string, statusVoto: 'encontrado' | 'nao_encontrado') {
     // Atualiza o estado local imediatamente (UI reativa rápida)
-    setItensFaltantes(prev => 
+    setItensFaltantes(prev =>
       prev.map(item => item.codigo_barras === barcode ? { ...item, status_conferencia: statusVoto } : item)
     );
 
@@ -116,27 +118,86 @@ export default function Dashboard() {
       }, { onConflict: 'sessao_id,codigo_barras' });
   }
 
-  // Gera o relatório de auditoria completo, categorizando o que foi achado ou não
-  async function exportarRelatorioConferenciaXLSX() {
+  async function exportarRelatorioConferenciaPDF() {
     if (itensFaltantes.length === 0) return alert('Sem dados para exportar');
 
-    const dadosPlanilha = itensFaltantes.map((item) => {
-      let statusTexto = 'Pendente de Verificação';
-      if (item.status_conferencia === 'encontrado') statusTexto = 'Encontrado no Depósito e Abastecido';
-      if (item.status_conferencia === 'nao_encontrado') statusTexto = 'Ruptura Real (Não encontrado no Depósito)';
-
-      return {
-        'Código Sistema': item.codigo_sistema,
-        'Código de Barras': item.codigo_barras,
-        'Descrição': item.descricao,
-        'Situação no Depósito': statusTexto
-      };
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4'
     });
 
-    const ws = XLSX.utils.json_to_sheet(dadosPlanilha);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Conferência Depósito");
-    XLSX.writeFile(wb, `Relatorio_Deposito_Sessao_${sessaoSelecionadaCodigo}.xlsx`);
+    // 1. Configuração do Cabeçalho do Relatório
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(18);
+    doc.setTextColor(16, 185, 129); // Cor Esmeralda
+    doc.text("REPOSIÇÃO INTELIGENTE", 14, 20);
+
+    doc.setFontSize(11);
+    doc.setTextColor(100, 116, 139); // Cinza
+    doc.setFont("helvetica", "normal");
+    doc.text(`Relatório de Conferência de Depósito — Sessão: ${sessaoSelecionadaCodigo}`, 14, 26);
+    doc.text(`Data de Emissão: ${new Date().toLocaleString('pt-BR')}`, 14, 31);
+    
+    // Linha divisória
+    doc.setDrawColor(226, 232, 240);
+    doc.line(14, 35, 196, 35);
+
+    // 2. Formatação das linhas e colunas para a tabela do PDF
+    const colunas = ["Código", "Código de Barras (EAN)", "Descrição do Produto", "Situação no Depósito"];
+    
+    const linhas = itensFaltantes.map((item) => {
+      let situacao = "Pendente";
+      if (item.status_conferencia === 'encontrado') situacao = "Encontrado e Abastecido";
+      if (item.status_conferencia === 'nao_encontrado') situacao = "Ruptura Real (Falta)";
+      
+      return [
+        item.codigo_sistema,
+        item.codigo_barras,
+        item.descricao,
+        situacao
+      ];
+    });
+
+    // 3. Montagem das opções de estilo tipadas com segurança para o compilador
+    const opcoesTabela: UserOptions = {
+      startY: 40,
+      head: [colunas],
+      body: linhas,
+      theme: 'striped',
+      headStyles: {
+        fillColor: [31, 41, 55],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold'
+      },
+      didParseCell: function(data) {
+        if (data.section === 'body' && data.column.index === 3) {
+          const texto = data.cell.raw;
+          if (texto === "Encontrado e Abastecido") {
+            data.cell.styles.textColor = [16, 124, 65]; // Verde
+            data.cell.styles.fontStyle = 'bold';
+          } else if (texto === "Ruptura Real (Falta)") {
+            data.cell.styles.textColor = [220, 38, 38]; // Vermelho
+            data.cell.styles.fontStyle = 'bold';
+          }
+        }
+      },
+      styles: {
+        fontSize: 9,
+        cellPadding: 3
+      },
+      columnStyles: {
+        0: { cellWidth: 20 },
+        1: { cellWidth: 35 },
+        2: { cellWidth: 'auto' },
+        3: { cellWidth: 45 }
+      }
+    };
+
+    // 3. Executa o plugin estendendo a interface de forma segura para o compilador do TypeScript
+    autoTable(doc, opcoesTabela);
+
+    doc.save(`Relatorio_Deposito_Sessao_${sessaoSelecionadaCodigo}.pdf`);
   }
 
   async function verItensCapturados(sessaoId: string, codigoSessao: string) {
@@ -192,7 +253,7 @@ export default function Dashboard() {
 
       <section className="flex flex-col gap-3 flex-1">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-500">Histórico de Auditorias</h2>
-        
+
         {loading ? (
           <div className="text-center text-zinc-500 py-8">Carregando histórico...</div>
         ) : sessoes.length === 0 ? (
@@ -273,22 +334,20 @@ export default function Dashboard() {
                     <div className="flex items-center gap-1 shrink-0">
                       <button
                         onClick={() => handleVotoDeposito(item.codigo_barras, 'encontrado')}
-                        className={`p-2 rounded-lg border transition-all active:scale-90 ${
-                          item.status_conferencia === 'encontrado'
+                        className={`p-2 rounded-lg border transition-all active:scale-90 ${item.status_conferencia === 'encontrado'
                             ? 'bg-emerald-500 text-zinc-950 border-emerald-400 shadow-md shadow-emerald-950/40'
                             : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700'
-                        }`}
+                          }`}
                         title="Encontrei e peguei"
                       >
                         <ThumbsUp className="w-4 h-4 stroke-[2.5]" />
                       </button>
                       <button
                         onClick={() => handleVotoDeposito(item.codigo_barras, 'nao_encontrado')}
-                        className={`p-2 rounded-lg border transition-all active:scale-90 ${
-                          item.status_conferencia === 'nao_encontrado'
+                        className={`p-2 rounded-lg border transition-all active:scale-90 ${item.status_conferencia === 'nao_encontrado'
                             ? 'bg-red-500 text-zinc-50 border-red-400 shadow-md shadow-red-950/40'
                             : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700'
-                        }`}
+                          }`}
                         title="Não encontrei no depósito"
                       >
                         <ThumbsDown className="w-4 h-4 stroke-[2.5]" />
@@ -299,14 +358,14 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* BOTÃO DA ÁREA DE RELATÓRIOS INTEGRADO NO RODAPÉ */}
+            {/* Altere o botão no rodapé do modal de faltas para ficar assim: */}
             {itensFaltantes.length > 0 && (
               <footer className="p-4 bg-zinc-900 border-t border-zinc-800">
                 <button
-                  onClick={exportarRelatorioConferenciaXLSX}
+                  onClick={exportarRelatorioConferenciaPDF} // <--- Chamada do PDF atualizada aqui
                   className="w-full bg-amber-500 hover:bg-amber-600 text-zinc-950 font-bold py-3 rounded-xl transition-all active:scale-[0.99] flex items-center justify-center gap-2 text-sm shadow-md shadow-amber-950/20"
                 >
-                  <FileSpreadsheet className="w-4 h-4 stroke-[2.5]" /> Exportar Relatório de Conferência
+                  <FileSpreadsheet className="w-4 h-4 stroke-[2.5]" /> Exportar Relatório em PDF
                 </button>
               </footer>
             )}
