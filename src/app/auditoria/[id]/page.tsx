@@ -1,9 +1,9 @@
 'use client';
-import { useEffect, useState, use, useCallback, startTransition, useRef} from 'react';
+import { useEffect, useState, use, useCallback, startTransition, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import BarcodeScanner from '../../../components/BarcodeScanner';
-import { Check, X, Barcode, ClipboardList, Loader2, Camera } from 'lucide-react';
+import { Check, X, Barcode, ClipboardList, Loader2, Camera, Trash2, Plus } from 'lucide-react';
 
 interface Produto {
   codigo_sistema: string;
@@ -36,6 +36,11 @@ export default function AuditoriaPage({ params }: PageProps) {
   const [buscando, setBuscando] = useState(false);
   const [cameraAberta, setCameraAberta] = useState(false);
   const [msgFeedback, setMsgFeedback] = useState({ tipo: '', texto: '' });
+  
+  // Estados para a digitação manual do código de barras
+  const [codigoManual, setCodigoManual] = useState('');
+  
+  const escaneandoRef = useRef(false);
 
   const buscarDadosSessao = useCallback(async () => {
     const { data: sessaoData } = await supabase
@@ -63,27 +68,26 @@ export default function AuditoriaPage({ params }: PageProps) {
     buscarDadosSessao();
   }, [buscarDadosSessao]);
 
-  // Adicione esta referência logo abaixo dos outros useState no topo do componente:
-  const escaneandoRef = useRef(false);
-
-  // Substitua a função handleBarcodeScan por esta:
-  async function handleBarcodeScan(barcode: string) {
-    // Se já estiver processando um bipe, ignora frames concorrentes imediatamente
-    if (buscando || escaneandoRef.current) return;
+  // Função central para processar a entrada de códigos (seja via câmera ou teclado)
+  async function processarCodigoBarras(barcode: string, viaManual = false) {
+    if (buscando || (!viaManual && escaneandoRef.current)) return;
     
-    escaneandoRef.current = true;
-    setCameraAberta(false); // Desmonta o componente da câmera primeiro
+    if (!viaManual) {
+      escaneandoRef.current = true;
+      setCameraAberta(false);
+    }
+
+    setMsgFeedback({ tipo: '', texto: '' });
 
     // Validação de duplicidade na mesma sessão
     const codigoJaExiste = itens.some(item => item.produtos?.codigo_barras === barcode);
     if (codigoJaExiste) {
       setMsgFeedback({ tipo: 'erro', texto: `Código ${barcode} já capturado nesta sessão!` });
-      escaneandoRef.current = false;
+      if (!viaManual) escaneandoRef.current = false;
       return;
     }
 
     setBuscando(true);
-    setMsgFeedback({ tipo: '', texto: '' });
 
     const { data: produto, error } = await supabase
       .from('produtos')
@@ -94,20 +98,22 @@ export default function AuditoriaPage({ params }: PageProps) {
     if (error || !produto) {
       setMsgFeedback({ tipo: 'erro', texto: `Produto não cadastrado: ${barcode}` });
       setBuscando(false);
-      escaneandoRef.current = false;
+      if (!viaManual) escaneandoRef.current = false;
       return;
     }
 
-    // Vincula o item ao Supabase de forma isolada
-    const { error: insertError } = await supabase
+    // Vincula o item ao Supabase de forma segura
+    const { data: novoItemData, error: insertError } = await supabase
       .from('itens_capturados')
-      .insert([{ sessao_id: sessaoId, produto_id: produto.id }]);
+      .insert([{ sessao_id: sessaoId, produto_id: produto.id }])
+      .select('id')
+      .single();
 
-    if (!insertError) {
+    if (!insertError && novoItemData) {
       setMsgFeedback({ tipo: 'sucesso', texto: `${produto.descricao} adicionado!` });
       
       const novoItem: ItemCapturado = {
-        id: Date.now(),
+        id: novoItemData.id, // ID real inserido no banco para permitir a exclusão posterior
         produtos: {
           codigo_sistema: produto.codigo_sistema,
           codigo_barras: produto.codigo_barras,
@@ -116,15 +122,48 @@ export default function AuditoriaPage({ params }: PageProps) {
       };
       
       setItens((prev) => [novoItem, ...prev]);
+      if (viaManual) setCodigoManual(''); // Limpa o input se foi digitado
     } else {
       setMsgFeedback({ tipo: 'erro', texto: 'Erro ao salvar o item no banco de dados.' });
     }
 
     setBuscando(false);
-    // Libera a trava síncrona após a conclusão do ciclo de renderização
-    setTimeout(() => {
-      escaneandoRef.current = false;
-    }, 300);
+    
+    if (!viaManual) {
+      setTimeout(() => {
+        escaneandoRef.current = false;
+      }, 300);
+    }
+  }
+
+  // Função para lidar com o bipe da câmera
+  async function handleBarcodeScan(barcode: string) {
+    await processarCodigoBarras(barcode, false);
+  }
+
+  // Função para lidar com o envio manual via teclado
+  async function handleEnvioManual(e: React.FormEvent) {
+    e.preventDefault();
+    const codigoLimpo = codigoManual.trim();
+    if (!codigoLimpo) return;
+    await processarCodigoBarras(codigoLimpo, true);
+  }
+
+  // FEATURE 2: Excluir item capturado equivocadamente antes de fechar a sessão
+  async function removerItemCapturado(idItem: number, descricao: string) {
+    if (confirm(`Deseja remover "${descricao}" desta captura?`)) {
+      const { error } = await supabase
+        .from('itens_capturados')
+        .delete()
+        .eq('id', idItem);
+
+      if (!error) {
+        setItens((prev) => prev.filter(item => item.id !== idItem));
+        setMsgFeedback({ tipo: 'sucesso', texto: 'Item removido com sucesso!' });
+      } else {
+        setMsgFeedback({ tipo: 'erro', texto: 'Erro ao remover o item do banco de dados.' });
+      }
+    }
   }
 
   async function finalizarSessao() {
@@ -151,6 +190,7 @@ export default function AuditoriaPage({ params }: PageProps) {
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-50 p-4 max-w-md mx-auto flex flex-col gap-4">
+      {/* Informações da Sessão */}
       <div className="flex justify-between items-center bg-zinc-900 border border-zinc-800 rounded-xl p-3 shadow-inner">
         <div>
           <p className="text-xs text-zinc-500 uppercase tracking-wider font-semibold">Código Interno</p>
@@ -164,6 +204,7 @@ export default function AuditoriaPage({ params }: PageProps) {
         </div>
       </div>
 
+      {/* Visor de Leitura / Gatilho da Câmera */}
       {cameraAberta ? (
         <div className="relative">
           <BarcodeScanner onScanSuccess={handleBarcodeScan} />
@@ -185,10 +226,32 @@ export default function AuditoriaPage({ params }: PageProps) {
           <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-full shadow-md text-emerald-400">
             <Camera className="w-8 h-8" />
           </div>
-          <span className="font-semibold text-sm tracking-wide">Escanear Produto</span>
+          <span className="font-semibold text-sm tracking-wide">Escanear com a Câmera</span>
         </button>
       )}
 
+      {/* FEATURE 1: Bloco de Entrada e Digitação Manual do Código de Barras */}
+      <form onSubmit={handleEnvioManual} className="w-full max-w-md mx-auto flex gap-2">
+        <input
+          type="text"
+          pattern="[0-9]*"
+          inputMode="numeric"
+          placeholder="Digitar código de barras manualmente..."
+          value={codigoManual}
+          onChange={(e) => setCodigoManual(e.target.value)}
+          className="flex-1 bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 font-mono text-zinc-100 placeholder:text-zinc-600 shadow-inner"
+        />
+        <button
+          type="submit"
+          disabled={buscando || !codigoManual.trim()}
+          className="bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-emerald-400 disabled:opacity-40 disabled:text-zinc-600 p-3 rounded-xl transition-colors active:scale-95"
+          title="Adicionar Código Digitado"
+        >
+          <Plus className="w-5 h-5 stroke-[2.5]" />
+        </button>
+      </form>
+
+      {/* Feedbacks de Consulta */}
       {buscando && (
         <div className="flex items-center justify-center gap-2 text-zinc-400 text-sm py-1 bg-zinc-900/50 rounded-lg">
           <Loader2 className="w-4 h-4 animate-spin text-emerald-400" /> Consultando banco...
@@ -203,6 +266,7 @@ export default function AuditoriaPage({ params }: PageProps) {
         </div>
       )}
 
+      {/* Listagem Ativa com Botão de Remoção por Linha */}
       <section className="flex-1 flex flex-col gap-2 overflow-hidden">
         <div className="flex items-center justify-between border-b border-zinc-800 pb-1">
           <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500 flex items-center gap-1">
@@ -211,23 +275,35 @@ export default function AuditoriaPage({ params }: PageProps) {
           <span className="text-xs font-mono text-zinc-400">{itens.length} capturados</span>
         </div>
 
-        <div className="flex-1 overflow-y-auto space-y-2 pr-1 max-h-[35vh]">
+        <div className="flex-1 overflow-y-auto space-y-2 pr-1 max-h-[30vh]">
           {itens.length === 0 ? (
-            <div className="text-center text-zinc-600 text-sm py-8">Clique no botão acima para iniciar a leitura.</div>
+            <div className="text-center text-zinc-600 text-sm py-8">Use a câmera ou digite o código de barras acima.</div>
           ) : (
             itens.map((item) => (
-              <div key={item.id} className="bg-zinc-900/80 border border-zinc-800/60 rounded-lg p-3 flex flex-col gap-1 shadow-sm">
-                <span className="text-sm font-semibold text-zinc-200 line-clamp-1">{item.produtos?.descricao}</span>
-                <div className="flex justify-between items-center text-xs text-zinc-500 font-mono">
-                  <span className="flex items-center gap-0.5"><Barcode className="w-3 h-3" /> {item.produtos?.codigo_barras}</span>
-                  <span>Cod: {item.produtos?.codigo_sistema}</span>
+              <div key={item.id} className="bg-zinc-900/80 border border-zinc-800/60 rounded-lg p-3 flex justify-between items-center shadow-sm gap-2">
+                <div className="flex flex-col gap-1 min-w-0 flex-1">
+                  <span className="text-sm font-semibold text-zinc-200 line-clamp-1">{item.produtos?.descricao}</span>
+                  <div className="flex gap-4 items-center text-xs text-zinc-500 font-mono">
+                    <span className="flex items-center gap-0.5"><Barcode className="w-3 h-3" /> {item.produtos?.codigo_barras}</span>
+                    <span>Cod: {item.produtos?.codigo_sistema}</span>
+                  </div>
                 </div>
+                
+                {/* Botão de Exclusão da Captura Atual */}
+                <button
+                  onClick={() => removerItemCapturado(item.id, item.produtos?.descricao || '')}
+                  className="bg-zinc-950 hover:bg-red-950/40 border border-zinc-800 hover:border-red-900/50 text-zinc-500 hover:text-red-400 p-2 rounded-lg transition-colors active:scale-90"
+                  title="Remover produto da lista"
+                >
+                  <Trash2 className="w-4 h-4 stroke-2" />
+                </button>
               </div>
             ))
           )}
         </div>
       </section>
 
+      {/* Rodapé Fixo */}
       <footer className="grid grid-cols-2 gap-3 pt-2 bg-zinc-950 border-t border-zinc-900">
         <button
           onClick={cancelarSessao}
